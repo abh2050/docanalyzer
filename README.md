@@ -112,8 +112,6 @@ Contributions are welcome! Please:
 ## License
 This project is licensed under the MIT License. See the `LICENSE` file for details.
 
-## Contact
-For questions or support, reach out to [your-email@example.com] or open an issue on GitHub.
 ```
 
 This README provides a clear and comprehensive guide to the Document Intelligence application, covering its features, setup, usage, and contribution guidelines. It’s structured to be user-friendly for both developers and end-users. Let me know if you need any adjustments!
