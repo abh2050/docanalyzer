@@ -1,6 +1,7 @@
 ![](https://valenta.io/wp-content/uploads/2023/08/IDP-Services-1.jpg)
 # Document Intelligence: Advanced Contract Analysis and Chat Application
 
+## App Link: https://docuintel.streamlit.app/
 ## Overview
 Document Intelligence is a powerful tool designed for advanced contract analysis and interaction. Leveraging the Gemini API, it supports PDF, DOCX, and TXT files to provide comprehensive contract insights through a user-friendly Streamlit interface. The application offers semantic clause comparison, regulatory compliance checks, contract quality assessment, executive summaries, and contextual Q&A capabilities.
 
