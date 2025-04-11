@@ -28,7 +28,7 @@ import time
 load_dotenv()
 try:
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash")
 except Exception as e:
     st.error(f"Failed to configure Gemini API: {str(e)}")
     st.stop()
@@ -188,7 +188,7 @@ def chat_with_contract(query: str, paragraphs: List[str]) -> str:
             return "Failed to process query."
         para_scores = [(p, cosine_similarity(get_embedding(p), query_emb)) for p in paragraphs]
         best = sorted(para_scores, key=lambda x: x[1], reverse=True)[:3]
-        context = "\n\n".join([b[0] for b in best])
+        context = "\n\n".join([b[0] for b inVen_p best])
         prompt = f"""
 **Context:**
 {context}
@@ -220,7 +220,7 @@ if "unmatched_msa" not in st.session_state:
 if "evaluation" not in st.session_state:
     st.session_state["evaluation"] = {}
 
-tab1, tab2, tab3, tab4 = st.tabs(["🔍 Clause Comparison", "✅ Compliance & Quality", "💬 Contract Q&A", "📚 Load Samples"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔍 Clause Comparison", "✅ Compliance, Quality & Executive Summary", "💬 Contract Q&A", "📚 Load Samples"])
 
 with tab4:
     st.subheader("Load Sample Contracts")
@@ -254,7 +254,7 @@ with tab1:
             if st.session_state["msa_text"]:
                 st.success("MSA contract processed.")
 
-    if vendor board:
+    if vendor_file:
         with st.spinner("Processing Vendor contract..."):
             if vendor_file.type == "application/pdf":
                 st.session_state["vendor_text"] = extract_text_pdf(vendor_file)
