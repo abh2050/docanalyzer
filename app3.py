@@ -28,7 +28,7 @@ import time
 load_dotenv()
 try:
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash")
 except Exception as e:
     st.error(f"Failed to configure Gemini API: {str(e)}")
     st.stop()
@@ -66,14 +66,58 @@ def split_into_paragraphs(text: str) -> List[str]:
     paragraphs = [p.strip() for p in text.split("\n\n") if len(p.split()) > 10]
     return paragraphs
 
-def get_embedding(text: str) -> List[float]:
-    """Generate embedding for a given text."""
+def get_embedding(text: str, max_length: int = 2500) -> List[float]:
+    """
+    Generate embedding for a given text.
+    Truncates text if it exceeds max_length to avoid API payload limits.
+    """
     try:
-        response = model.embed_content(content=text, task_type="RETRIEVAL_DOCUMENT")
-        return response["embedding"]
+        # Truncate text if it's too long to avoid payload size errors
+        if len(text) > max_length:
+            text = text[:max_length]
+            
+        # Using embedding-001 model for embeddings
+        result = genai.embed_content(
+            model="models/embedding-001",
+            content=text,
+            task_type="semantic_similarity"
+        )
+        return result["embedding"]
     except Exception as e:
         st.error(f"Embedding error: {str(e)}")
         return []
+
+def embed_long_text(text: str, chunk_size: int = 2000, overlap: int = 200) -> List[float]:
+    """
+    Generate embedding for long texts by splitting into chunks, 
+    embedding each chunk, and averaging the results.
+    """
+    if len(text) <= chunk_size:
+        return get_embedding(text)
+    
+    # Split text into overlapping chunks
+    chunks = []
+    for i in range(0, len(text), chunk_size - overlap):
+        chunk = text[i:i + chunk_size]
+        if len(chunk) > 100:  # Only include chunks with meaningful content
+            chunks.append(chunk)
+    
+    if not chunks:
+        return []
+    
+    # Get embeddings for each chunk
+    embeddings = []
+    for chunk in chunks:
+        emb = get_embedding(chunk)
+        if emb:
+            embeddings.append(np.array(emb))
+    
+    if not embeddings:
+        return []
+    
+    # Average the embeddings
+    avg_embedding = np.mean(embeddings, axis=0)
+    return avg_embedding.tolist()
 
 def cosine_similarity(vecA: List[float], vecB: List[float]) -> float:
     """Calculate cosine similarity between two vectors."""
@@ -145,6 +189,17 @@ Provide:
     except Exception as e:
         return {"text": f"Evaluation error: {str(e)}", "score": 0, "missing_clauses": []}
 
+def evaluate_contract_and_generate_results(msa_paragraphs: List[str], vendor_paragraphs: List[str]):
+    """Evaluate contract and generate analysis results."""
+    evaluation = evaluate_contract_compliance(msa_paragraphs, vendor_paragraphs)
+    
+    # Create placeholder analysis results for executive summary
+    st.session_state["analysis_results"] = []
+    st.session_state["unmatched_msa"] = []
+    st.session_state["evaluation"] = evaluation
+    
+    return evaluation
+
 def generate_executive_summary(
     results: List[Tuple], unmatched_msa: List[Tuple], evaluation: Dict
 ) -> str:
@@ -183,12 +238,55 @@ Use a professional tone suitable for senior management.
 def chat_with_contract(query: str, paragraphs: List[str]) -> str:
     """Answer a query using relevant contract paragraphs."""
     try:
+        # Use shorter paragraphs or truncate very long ones
+        filtered_paragraphs = []
+        for p in paragraphs:
+            if len(p) > 7500:  # Truncate extremely long paragraphs (increased from 5000)
+                p = p[:7500] + "..."
+            filtered_paragraphs.append(p)
+        
+        # Get query embedding
         query_emb = get_embedding(query)
         if not query_emb:
             return "Failed to process query."
-        para_scores = [(p, cosine_similarity(get_embedding(p), query_emb)) for p in paragraphs]
-        best = sorted(para_scores, key=lambda x: x[1], reverse=True)[:3]
-        context = "\n\n".join([b[0] for b inVen_p best])
+        
+        # Calculate similarity for each paragraph
+        para_scores = []
+        for p in filtered_paragraphs:
+            try:
+                # Use the embed_long_text function for potentially long paragraphs
+                p_emb = embed_long_text(p) if len(p) > 2000 else get_embedding(p)
+                if p_emb:
+                    score = cosine_similarity(p_emb, query_emb)
+                    para_scores.append((p, score))
+            except Exception as e:
+                st.error(f"Error processing paragraph: {str(e)}")
+        
+        if not para_scores:
+            return "Could not analyze the contracts effectively. Please try a different query."
+        
+        # Sort by similarity score and get top 5 (increased from 3)
+        best = sorted(para_scores, key=lambda x: x[1], reverse=True)[:5]
+        
+        # Limit context size but increased for up to 10 pages
+        context_parts = []
+        total_length = 0
+        max_context_length = 10000  # Increased from 6000 (about 10 pages of content)
+        
+        for b in best:
+            if total_length + len(b[0]) <= max_context_length:
+                context_parts.append(b[0])
+                total_length += len(b[0])
+            else:
+                # Add a truncated version if the full paragraph would exceed limit
+                space_left = max_context_length - total_length
+                if space_left > 500:  # Only add if we can include something substantial
+                    context_parts.append(b[0][:space_left] + "...")
+                break
+        
+        context = "\n\n".join(context_parts)
+        
+        # Craft prompt carefully to stay within limits
         prompt = f"""
 **Context:**
 {context}
@@ -199,14 +297,18 @@ def chat_with_contract(query: str, paragraphs: List[str]) -> str:
 Provide a clear, concise answer based on the context. If the context is insufficient, state so and suggest next steps.
 """
         response = model.generate_content(prompt)
-        return response.text
+        
+        # Add disclaimer to the response
+        disclaimer = "\n\n*Disclaimer: This AI-generated response is based on contract analysis and should not be considered legal advice. Please consult with qualified legal counsel for professional guidance on contract matters.*"
+        
+        return response.text + disclaimer
     except Exception as e:
         return f"Chat error: {str(e)}"
 
 # Streamlit App
 st.set_page_config(page_title="Document Intelligence", layout="wide", page_icon="📑")
 st.title("📑 Document Intelligence")
-st.markdown("Analyze contracts semantically, check compliance, assess quality, and generate executive summaries with AI-powered insights.")
+st.markdown("Analyze contracts, check compliance, assess quality, and generate executive summaries with AI-powered insights.")
 
 # Initialize session state
 if "msa_text" not in st.session_state:
@@ -220,28 +322,51 @@ if "unmatched_msa" not in st.session_state:
 if "evaluation" not in st.session_state:
     st.session_state["evaluation"] = {}
 
-tab1, tab2, tab3, tab4 = st.tabs(["🔍 Clause Comparison", "✅ Compliance, Quality & Executive Summary", "💬 Contract Q&A", "📚 Load Samples"])
-
-with tab4:
-    st.subheader("Load Sample Contracts")
-    if st.button("Load Example MSA & Vendor Contracts"):
-        with st.spinner("Loading sample contracts..."):
-            try:
-                with open("examples/sample_msa.pdf", "rb") as f:
-                    st.session_state["msa_text"] = extract_text_pdf(f)
-                with open("examples/sample_vendor.pdf", "rb") as f:
-                    st.session_state["vendor_text"] = extract_text_pdf(f)
-                st.success("Sample contracts loaded successfully!")
-            except Exception as e:
-                st.error(f"Failed to load samples: {str(e)}")
+# Modified tabs without the Load Samples tab
+tab1, tab2 = st.tabs(["✅ Compliance, Quality & Executive Summary", "💬 Contract Q&A"])
 
 with tab1:
-    st.subheader("Semantic Clause Comparison")
+    st.subheader("Compliance, Quality & Executive Summary")
+    
+    # Add file uploaders for contracts and sample loading option
     col1, col2 = st.columns(2)
+    
     with col1:
         msa_file = st.file_uploader("Upload MSA Contract", type=["pdf", "docx", "txt"], key="msa")
     with col2:
         vendor_file = st.file_uploader("Upload Vendor Contract", type=["pdf", "docx", "txt"], key="vendor")
+    
+    # Add the Load Sample button
+    if st.button("Load Example MSA & Vendor Contracts"):
+        with st.spinner("Loading sample contracts..."):
+            try:
+                # Use relative paths for GitHub/Streamlit Cloud compatibility
+                examples_dir = "examples"
+                msa_path = os.path.join(examples_dir, "MASTER SERVICES AGREEMENT.docx")
+                vendor_path = os.path.join(examples_dir, "VENDOR CONTRACT AGREEMENT.docx")
+                
+                # Create examples directory if it doesn't exist
+                if not os.path.exists(examples_dir):
+                    os.makedirs(examples_dir)
+                    st.info(f"Created directory: {examples_dir}")
+                
+                # Check if files exist
+                if os.path.exists(msa_path):
+                    st.session_state["msa_text"] = extract_text_docx(msa_path)
+                    if st.session_state["msa_text"]:
+                        st.success("MSA contract loaded successfully!")
+                else:
+                    st.error(f"MSA file not found at: {msa_path}")
+                
+                if os.path.exists(vendor_path):
+                    st.session_state["vendor_text"] = extract_text_docx(vendor_path)
+                    if st.session_state["vendor_text"]:
+                        st.success("Vendor contract loaded successfully!")
+                else:
+                    st.error(f"Vendor file not found at: {vendor_path}")
+                    
+            except Exception as e:
+                st.error(f"Failed to load samples: {str(e)}")
 
     if msa_file:
         with st.spinner("Processing MSA contract..."):
@@ -269,72 +394,9 @@ with tab1:
         msa_paragraphs = split_into_paragraphs(st.session_state["msa_text"])
         vendor_paragraphs = split_into_paragraphs(st.session_state["vendor_text"])
 
-        if st.button("Compare Clauses Semantically"):
-            with st.spinner("Analyzing clauses with semantic matching..."):
-                progress = st.progress(0)
-                results = []
-                unmatched_msa = []
-                total = len(msa_paragraphs)
-                for i, msa_para in enumerate(msa_paragraphs):
-                    try:
-                        msa_emb = get_embedding(msa_para)
-                        if not msa_emb:
-                            unmatched_msa.append((i+1, msa_para))
-                            continue
-                        similarities = [
-                            (j, vp, cosine_similarity(msa_emb, get_embedding(vp)))
-                            for j, vp in enumerate(vendor_paragraphs)
-                        ]
-                        similarities = [(j, vp, score) for j, vp, score in similarities if score >= 0.5]
-                        if similarities:
-                            for j, ven_para, score in sorted(similarities, key=lambda x: x[2], reverse=True):
-                                analysis = analyze_clause(msa_para, ven_para, score)
-                                results.append((i+1, msa_para, ven_para, score, analysis))
-                        else:
-                            unmatched_msa.append((i+1, msa_para))
-                    except:
-                        unmatched_msa.append((i+1, msa_para))
-                    progress.progress((i + 1) / total)
-
-                st.session_state["analysis_results"] = results
-                st.session_state["unmatched_msa"] = unmatched_msa
-
-                if results:
-                    st.subheader("Semantic Clause Matches")
-                    for idx, msa_p, ven_p, score, analysis in sorted(results, key=lambda x: x[3], reverse=True):
-                        with st.expander(f"Clause Match {idx} (Similarity: {score:.2f})"):
-                            st.markdown("**MSA Clause:**")
-                            st.write(msa_p)
-                            st.markdown("**Vendor Clause:**")
-                            st.write(ven_p)
-                            st.markdown("**Analysis:**")
-                            st.markdown(analysis["analysis"])
-                            if analysis["compliance_issues"]:
-                                st.warning("Potential compliance issues detected.")
-                            if analysis["risks"]:
-                                st.error("High-risk clause detected.")
-                else:
-                    st.warning("No significant clause matches found (similarity < 0.5).")
-
-                if unmatched_msa:
-                    st.subheader("Unmatched MSA Clauses")
-                    for idx, msa_p in unmatched_msa:
-                        with st.expander(f"Unmatched Clause {idx}"):
-                            st.markdown("**MSA Clause:**")
-                            st.write(msa_p)
-                            st.info("No semantically similar clause found in the vendor contract.")
-
-                progress.empty()
-
-with tab2:
-    st.subheader("Compliance, Quality & Executive Summary")
-    if st.session_state["msa_text"] and st.session_state["vendor_text"]:
         if st.button("Evaluate Contract & Generate Summary"):
             with st.spinner("Evaluating compliance, quality, and generating summary..."):
-                msa_paragraphs = split_into_paragraphs(st.session_state["msa_text"])
-                vendor_paragraphs = split_into_paragraphs(st.session_state["vendor_text"])
-                evaluation = evaluate_contract_compliance(msa_paragraphs, vendor_paragraphs)
-                st.session_state["evaluation"] = evaluation
+                evaluation = evaluate_contract_and_generate_results(msa_paragraphs, vendor_paragraphs)
 
                 st.markdown("**Evaluation Results:**")
                 st.markdown(evaluation["text"])
@@ -346,25 +408,24 @@ with tab2:
                     st.warning("Moderate compliance. Consider addressing gaps.")
                 else:
                     st.success("High compliance with MSA.")
-
-                if st.session_state["analysis_results"] or st.session_state["unmatched_msa"]:
-                    st.subheader("Executive Summary")
-                    summary = generate_executive_summary(
-                        st.session_state["analysis_results"],
-                        st.session_state["unmatched_msa"],
-                        st.session_state["evaluation"]
-                    )
-                    st.markdown(summary)
-                    st.download_button(
-                        label="Download Executive Summary",
-                        data=summary,
-                        file_name="executive_summary.txt",
-                        mime="text/plain"
-                    )
+                
+                st.subheader("Executive Summary")
+                summary = generate_executive_summary(
+                    st.session_state["analysis_results"],
+                    st.session_state["unmatched_msa"],
+                    evaluation
+                )
+                st.markdown(summary)
+                st.download_button(
+                    label="Download Executive Summary",
+                    data=summary,
+                    file_name="executive_summary.txt",
+                    mime="text/plain"
+                )
     else:
         st.warning("Please upload both MSA and Vendor contracts to evaluate.")
 
-with tab3:
+with tab2:
     st.subheader("Ask Questions About Contracts")
     if st.session_state["msa_text"] or st.session_state["vendor_text"]:
         paragraphs = split_into_paragraphs(st.session_state["msa_text"]) + split_into_paragraphs(st.session_state["vendor_text"])
