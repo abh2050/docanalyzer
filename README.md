@@ -35,7 +35,7 @@ Document Intelligence is a powerful tool designed for advanced contract analysis
 ## Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-repo/document-intelligence.git
+   git clone https://github.com/abh2050/docanalyzer.git
    cd document-intelligence
    ```
 
