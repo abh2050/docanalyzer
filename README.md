@@ -95,7 +95,10 @@ Listed in `requirements.txt`. Key libraries include:
 - Disclaimer: AI-generated outputs are for informational purposes and should not be considered legal advice. Consult qualified legal counsel for professional guidance.
 
 ## Example Usecase
-
+![](https://github.com/abh2050/docanalyzer/blob/main/samples/pic1.png)
+![](https://github.com/abh2050/docanalyzer/blob/main/samples/pic2.png)
+![](https://github.com/abh2050/docanalyzer/blob/main/samples/pic4.png)
+![](https://github.com/abh2050/docanalyzer/blob/main/samples/pic3.png)
 
 ## Contributing
 Contributions are welcome! Please:
